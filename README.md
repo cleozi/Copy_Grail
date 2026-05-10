@@ -1,4 +1,4 @@
-# copygrail
+# copygrail | copy-fail-CVE-2026-31431
 
 **copygrail** is a compact, single-file C++ implementation of the CVE-2026-31431 ("Copy Fail") local privilege escalation vulnerability.
 
