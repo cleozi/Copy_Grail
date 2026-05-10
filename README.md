@@ -36,3 +36,8 @@ sudo apt install zlib1g-dev
 ```
 g++ -O2 -static -o copygrail copygrail.cpp -lz
 ```
+
+## Run
+```
+./copygrail
+```
